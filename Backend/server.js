@@ -265,13 +265,10 @@ function startBackgroundTasks() {
 
 
 server.listen(PORT, HOST, () => {
-
+  // Railway sets PORT automatically (often 8080). Do NOT force PORT=5000 on Railway.
   console.log(`HexaChat server running on ${HOST}:${PORT}`);
-
   console.log(`Health: /api/health`);
-
   startBackgroundTasks();
-
 });
 
 

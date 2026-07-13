@@ -100,17 +100,19 @@ async function sendViaSmtp(email, subject, html) {
 }
 
 async function verifyEmailConnection() {
+  console.log(`Email config: RESEND=${resendConfigured ? 'yes' : 'no'}, SMTP=${smtpConfigured ? 'yes' : 'no'}`);
+
   if (resendConfigured) {
     console.log('Email OTP via Resend API ready');
     return true;
   }
 
   if (!transporter) {
-    console.warn('Email OTP OFF — add RESEND_API_KEY on Railway (resend.com, free)');
+    console.warn('Email OTP OFF — add Railway Variable RESEND_API_KEY=re_xxxxx then Redeploy');
     return false;
   }
 
-  console.warn('SMTP configured but Gmail is blocked on Railway. Add RESEND_API_KEY for OTP.');
+  console.warn('SMTP set but Railway blocks Gmail. Add RESEND_API_KEY for OTP.');
   return false;
 }
 
