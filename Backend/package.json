@@ -8,8 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
-    "postinstall": "npm rebuild sharp --foreground-scripts 2>/dev/null || true"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

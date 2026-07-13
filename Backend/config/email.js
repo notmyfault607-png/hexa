@@ -1,80 +1,28 @@
-const nodemailer = require('nodemailer');
-
 function cleanEnv(value) {
-  if (!value) return '';
+  if (value == null) return '';
   return String(value).trim().replace(/^["']|["']$/g, '');
 }
 
-const resendApiKey = cleanEnv(process.env.RESEND_API_KEY);
-const emailPort = parseInt(cleanEnv(process.env.EMAIL_PORT), 10) || 587;
-const emailUser = cleanEnv(process.env.EMAIL_USER);
-const emailPass = cleanEnv(process.env.EMAIL_PASS).replace(/\s/g, '');
-const emailHost = cleanEnv(process.env.EMAIL_HOST) || 'smtp.gmail.com';
-const emailFrom = cleanEnv(process.env.EMAIL_FROM)
-  || (emailUser ? `HexaChat <${emailUser}>` : 'HexaChat <onboarding@resend.dev>');
+const RESEND_API_KEY = cleanEnv(process.env.RESEND_API_KEY);
+const EMAIL_FROM = cleanEnv(process.env.EMAIL_FROM) || 'HexaChat <onboarding@resend.dev>';
+const OTP_MINUTES = cleanEnv(process.env.OTP_EXPIRY_MINUTES) || '10';
 
-const resendConfigured = !!resendApiKey;
-const smtpConfigured = !resendConfigured && !!(emailHost && emailUser && emailPass);
-const emailConfigured = resendConfigured || smtpConfigured;
+const emailConfigured = !!RESEND_API_KEY;
 
-function buildSmtpTransporter() {
-  if (!smtpConfigured) return null;
-
-  if (emailHost.includes('gmail.com')) {
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: emailUser, pass: emailPass },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000
-    });
-  }
-
-  return nodemailer.createTransport({
-    host: emailHost,
-    port: emailPort,
-    secure: emailPort === 465,
-    auth: { user: emailUser, pass: emailPass },
-    requireTLS: emailPort === 587,
-    tls: { minVersion: 'TLSv1.2' },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000
-  });
-}
-
-const transporter = buildSmtpTransporter();
-
-function mapEmailError(err) {
-  const msg = (err?.message || '').toLowerCase();
-  const code = err?.code || '';
-
-  if (msg.includes('timeout') || code === 'ETIMEDOUT' || code === 'ECONNECTION') {
-    return 'Railway blocks Gmail SMTP. Add RESEND_API_KEY in Railway Variables (free at resend.com).';
-  }
-  if (code === 'EAUTH' || msg.includes('authentication')) {
-    return 'Gmail login failed. Use 16-char App Password in EMAIL_PASS.';
-  }
-  if (msg.includes('resend')) {
-    return err.message;
-  }
-  return err?.message || 'Failed to send OTP email';
-}
-
-async function sendViaResend(email, subject, html) {
+async function sendViaResend(to, subject, html) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), 20000);
 
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${resendApiKey}`,
+        Authorization: `Bearer ${RESEND_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: emailFrom,
-        to: [email],
+        from: EMAIL_FROM,
+        to: [to],
         subject,
         html
       }),
@@ -83,8 +31,8 @@ async function sendViaResend(email, subject, html) {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const detail = data?.message || data?.error || `HTTP ${res.status}`;
-      throw new Error(`Resend: ${detail}`);
+      const detail = data.message || data.error || `HTTP ${res.status}`;
+      throw new Error(`Resend API failed: ${detail}`);
     }
     return data;
   } finally {
@@ -92,39 +40,38 @@ async function sendViaResend(email, subject, html) {
   }
 }
 
-async function sendViaSmtp(email, subject, html) {
-  if (!transporter) {
-    throw new Error('SMTP not configured. Add RESEND_API_KEY on Railway (recommended).');
-  }
-  await transporter.sendMail({ from: emailFrom, to: email, subject, html });
+function otpHtml(code) {
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#000;color:#fff;border-radius:12px;">
+      <h1 style="text-align:center;color:#fff;">HexaChat</h1>
+      <p style="text-align:center;color:#ccc;">Your verification code is:</p>
+      <div style="background:#111;border:2px solid #fff;border-radius:8px;padding:20px;text-align:center;margin:20px 0;">
+        <span style="font-size:32px;font-weight:bold;letter-spacing:8px;">${code}</span>
+      </div>
+      <p style="text-align:center;color:#888;font-size:12px;">Expires in ${OTP_MINUTES} minutes.</p>
+    </div>
+  `;
 }
 
 async function verifyEmailConnection() {
-  console.log(`Email config: RESEND=${resendConfigured ? 'yes' : 'no'}, SMTP=${smtpConfigured ? 'yes' : 'no'}`);
-
-  if (resendConfigured) {
-    console.log('Email OTP via Resend API ready');
-    return true;
-  }
-
-  if (!transporter) {
-    console.warn('Email OTP OFF — add Railway Variable RESEND_API_KEY=re_xxxxx then Redeploy');
+  if (!emailConfigured) {
+    console.warn('Email OTP OFF — set RESEND_API_KEY in Railway Variables');
     return false;
   }
-
-  console.warn('SMTP set but Railway blocks Gmail. Add RESEND_API_KEY for OTP.');
-  return false;
+  console.log('Email OTP ready (Resend API)');
+  console.log(`EMAIL_FROM=${EMAIL_FROM}`);
+  return true;
 }
 
 async function getEmailStatus() {
   return {
     configured: emailConfigured,
-    provider: resendConfigured ? 'resend' : smtpConfigured ? 'smtp' : 'none',
-    ready: resendConfigured,
-    from: emailFrom,
-    recommendation: resendConfigured
+    provider: emailConfigured ? 'resend' : 'none',
+    ready: emailConfigured,
+    from: EMAIL_FROM,
+    recommendation: emailConfigured
       ? null
-      : 'Add RESEND_API_KEY + EMAIL_FROM on Railway. Gmail SMTP does not work on Railway.'
+      : 'Add RESEND_API_KEY and EMAIL_FROM in Railway Variables'
   };
 }
 
@@ -137,31 +84,18 @@ async function sendOTPEmail(email, code, type) {
     ? 'HexaChat - Verify Your Email'
     : 'HexaChat - Reset Your Password';
 
-  const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 30px; background: #000; color: #fff; border-radius: 12px;">
-      <h1 style="color: #fff; text-align: center;">HexaChat</h1>
-      <p style="color: #ccc; text-align: center;">Your verification code is:</p>
-      <div style="background: #111; border: 2px solid #fff; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
-        <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #fff;">${code}</span>
-      </div>
-      <p style="color: #888; text-align: center; font-size: 12px;">Expires in ${process.env.OTP_EXPIRY_MINUTES || 10} minutes.</p>
-    </div>
-  `;
-
   try {
-    if (resendConfigured) {
-      await sendViaResend(email, subject, html);
-    } else {
-      await sendViaSmtp(email, subject, html);
-    }
+    await sendViaResend(email, subject, otpHtml(code));
   } catch (err) {
     console.error('sendOTPEmail error:', err.message);
-    throw new Error(mapEmailError(err));
+    if (err.name === 'AbortError') {
+      throw new Error('Email timeout. Check Resend API key and network.');
+    }
+    throw new Error(err.message || 'Failed to send OTP email');
   }
 }
 
 module.exports = {
-  transporter,
   sendOTPEmail,
   verifyEmailConnection,
   getEmailStatus,
