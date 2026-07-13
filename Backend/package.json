@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "description": "HexaChat Backend API Server",
   "main": "server.js",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "dev": "node --watch server.js",
+    "postinstall": "npm rebuild sharp --foreground-scripts 2>/dev/null || true"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

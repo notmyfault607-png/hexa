@@ -1,5 +1,4 @@
 const supabase = require('../config/supabase');
-const sharp = require('sharp');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 
@@ -24,6 +23,7 @@ async function ensureBuckets() {
 
 async function compressImage(buffer) {
   try {
+    const sharp = require('sharp');
     return await sharp(buffer)
       .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 80 })
