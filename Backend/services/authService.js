@@ -40,21 +40,22 @@ async function checkEmailAvailable(email) {
     .eq('email', cleanEmail)
     .maybeSingle();
 
-  const { data: pending } = await supabase
-    .from('pending_signups')
-    .select('id')
-    .eq('email', cleanEmail)
-    .maybeSingle();
-
-  return { available: !existingUser && !pending, message: existingUser || pending ? 'Email already registered' : 'Email available' };
+  return { available: !existingUser, message: existingUser ? 'Email already registered' : 'Email available' };
 }
 
+// Direct signup — NO OTP. Creates account immediately and returns token.
 async function signup(email, password, phone, name = null, skipName = false) {
   const cleanEmail = sanitizeInput(email).toLowerCase();
   const cleanPhone = sanitizeInput(phone);
   const cleanName = skipName || !name ? '' : sanitizeInput(name).trim();
   const nameSkipped = skipName || !cleanName;
 
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    throw new Error('Please enter a valid email address');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Password must be at least 6 characters');
+  }
   if (!cleanPhone || cleanPhone.length < 10) {
     throw new Error('Please enter a valid phone number');
   }
@@ -71,38 +72,38 @@ async function signup(email, password, phone, name = null, skipName = false) {
 
   const passwordHash = await hashPassword(password);
   const userNumber = await generateUserNumber();
+  const finalName = nameSkipped ? `User ${userNumber}` : cleanName;
 
-  await supabase.from('pending_signups').delete().eq('email', cleanEmail);
+  const { data: user, error: userError } = await supabase
+    .from('users')
+    .insert({
+      name: finalName,
+      email: cleanEmail,
+      phone: cleanPhone,
+      password_hash: passwordHash,
+      user_number: userNumber,
+      name_skipped: nameSkipped,
+      is_online: true,
+      last_seen: new Date().toISOString()
+    })
+    .select('id, name, email, phone, user_number, name_skipped, avatar_url, bio, about, is_online, last_seen')
+    .single();
 
-  const { error: pendingError } = await supabase.from('pending_signups').insert({
-    name: cleanName,
-    email: cleanEmail,
-    phone: cleanPhone,
-    password_hash: passwordHash,
-    user_number: userNumber,
-    name_skipped: nameSkipped
-  });
+  if (userError) {
+    console.error('signup insert error:', userError.message);
+    if (userError.code === '23505') throw new Error('Email or phone number already registered');
+    throw new Error('Failed to create account');
+  }
 
-  if (pendingError) throw new Error('Failed to initiate signup');
+  await supabase.from('user_settings').insert({ user_id: user.id }).then(() => {}, () => {});
+  await supabase.from('pending_signups').delete().eq('email', cleanEmail).then(() => {}, () => {});
 
-  const otp = generateOTP();
-  const expiresAt = getOTPExpiry();
-
-  await supabase.from('otp_codes').delete().eq('email', cleanEmail).eq('type', 'signup');
-
-  const { error: otpError } = await supabase.from('otp_codes').insert({
-    email: cleanEmail,
-    code: otp,
-    type: 'signup',
-    expires_at: expiresAt.toISOString()
-  });
-
-  if (otpError) throw new Error('Failed to generate OTP');
-
-  await sendOTPEmail(cleanEmail, otp, 'signup');
+  const token = generateToken({ userId: user.id });
 
   return {
-    message: 'OTP sent to your email',
+    message: 'Account created successfully',
+    user: { ...user, display_name: getDisplayName(user) },
+    token,
     userNumber: nameSkipped ? userNumber : null,
     phone: cleanPhone
   };
